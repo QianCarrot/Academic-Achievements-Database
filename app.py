@@ -92,6 +92,21 @@ def format_citation(row):
         
     return f"{title}"
 
+def get_duplicate_achievement(title):
+    """
+    检查数据库中是否已存在同名成果
+    :return: 如果存在则返回第一条匹配的记录(Series)，否则返回 None
+    """
+    if not title:
+        return None
+    conn = get_connection()
+    # 使用 LIKE 实现忽略大小写的精确匹配检查
+    df = pd.read_sql_query("SELECT * FROM achievements WHERE title LIKE ?", conn, params=(title.strip(),))
+    conn.close()
+    if not df.empty:
+        return df.iloc[0]
+    return None
+
 # -----------------------------------------------------------------------------
 # 侧边栏导航与状态管理
 # -----------------------------------------------------------------------------
@@ -464,13 +479,17 @@ elif menu == "成果信息录入":
                 elif status in ["网上发表", "出版"] and (not source or not details):
                     st.error("当前状态下，必须补全期刊名称和卷期页码信息。")
                 else:
-                    conn = get_connection()
-                    conn.execute("INSERT INTO achievements (category, status, title, authors, year, source, details) VALUES (?,?,?,?,?,?,?)",
-                                 (category, status, title, authors, year, source, details))
-                    conn.commit(); conn.close()
-                    st.session_state['parsed_data'] = {}
-                    st.session_state['success_msg'] = "期刊论文录入成功。"
-                    st.rerun()
+                    dup = get_duplicate_achievement(title)
+                    if dup is not None:
+                        st.error(f"🚫 **禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
+                    else:
+                        conn = get_connection()
+                        conn.execute("INSERT INTO achievements (category, status, title, authors, year, source, details) VALUES (?,?,?,?,?,?,?)",
+                                     (category, status, title, authors, year, source, details))
+                        conn.commit(); conn.close()
+                        st.session_state['parsed_data'] = {}
+                        st.session_state['success_msg'] = "期刊论文录入成功。"
+                        st.rerun()
                     
     elif category == "会议论文":
         status = st.selectbox("选择状态", ["未发表", "已发表"])
@@ -518,13 +537,17 @@ elif menu == "成果信息录入":
                 if not authors or not title or not source:
                     st.error("作者、文章名和会议名称不能为空。")
                 else:
-                    conn = get_connection()
-                    conn.execute("INSERT INTO achievements (category, status, title, authors, year, source) VALUES (?,?,?,?,?,?)",
-                                 (category, status, title, authors, year, source))
-                    conn.commit(); conn.close()
-                    st.session_state['parsed_data'] = {}
-                    st.session_state['success_msg'] = "会议论文录入成功。"
-                    st.rerun()
+                    dup = get_duplicate_achievement(title)
+                    if dup is not None:
+                        st.error(f"🚫 **禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
+                    else:
+                        conn = get_connection()
+                        conn.execute("INSERT INTO achievements (category, status, title, authors, year, source) VALUES (?,?,?,?,?,?)",
+                                     (category, status, title, authors, year, source))
+                        conn.commit(); conn.close()
+                        st.session_state['parsed_data'] = {}
+                        st.session_state['success_msg'] = "会议论文录入成功。"
+                        st.rerun()
 
     elif category == "发明专利":
         status = st.selectbox("选择状态", ["公开", "授权"])
@@ -539,12 +562,16 @@ elif menu == "成果信息录入":
                 if not authors or not title or not identifier:
                     st.error("发明人、专利名称和编号不能为空。")
                 else:
-                    conn = get_connection()
-                    conn.execute("INSERT INTO achievements (category, status, title, authors, year, identifier) VALUES (?,?,?,?,?,?)",
-                                 (category, status, title, authors, year, identifier))
-                    conn.commit(); conn.close()
-                    st.session_state['success_msg'] = "发明专利录入成功。"
-                    st.rerun()
+                    dup = get_duplicate_achievement(title)
+                    if dup is not None:
+                        st.error(f"🚫 **禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
+                    else:
+                        conn = get_connection()
+                        conn.execute("INSERT INTO achievements (category, status, title, authors, year, identifier) VALUES (?,?,?,?,?,?)",
+                                     (category, status, title, authors, year, identifier))
+                        conn.commit(); conn.close()
+                        st.session_state['success_msg'] = "发明专利录入成功。"
+                        st.rerun()
 
     elif category == "软件著作权":
         with st.form("software_form"):
@@ -555,12 +582,16 @@ elif menu == "成果信息录入":
                 if not title or not identifier:
                     st.error("软件名称和登记号不能为空。")
                 else:
-                    conn = get_connection()
-                    conn.execute("INSERT INTO achievements (category, status, title, identifier) VALUES (?,?,?,?)",
-                                 (category, "已登记", title, identifier))
-                    conn.commit(); conn.close()
-                    st.session_state['success_msg'] = "软件著作权录入成功。"
-                    st.rerun()
+                    dup = get_duplicate_achievement(title)
+                    if dup is not None:
+                        st.error(f"🚫 **禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
+                    else:
+                        conn = get_connection()
+                        conn.execute("INSERT INTO achievements (category, status, title, identifier) VALUES (?,?,?,?)",
+                                     (category, "已登记", title, identifier))
+                        conn.commit(); conn.close()
+                        st.session_state['success_msg'] = "软件著作权录入成功。"
+                        st.rerun()
 
 # -----------------------------------------------------------------------------
 # 模块：作者别名管理
