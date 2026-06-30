@@ -5,23 +5,18 @@ import os
 import re
 import base64
 import streamlit.components.v1 as components
+from datetime import datetime
 
-# -----------------------------------------------------------------------------
-# 全局配置与样式初始化
-# -----------------------------------------------------------------------------
-st.set_page_config(page_title="学术成果管理系统", layout="wide")
+# Global Configuration
+st.set_page_config(page_title="EVAS学术成果管理系统", layout="wide")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_NAME = os.path.join(BASE_DIR, "academic_db.sqlite")
 BG_IMG_PATH = os.path.join(BASE_DIR, "background.jpg")
 
 def inject_custom_css():
-    """
-    注入全局自定义 CSS 样式
-    包含背景图渲染及内容区底板配置
-    """
+    """Inject background and container styling"""
     css_rules = "<style>\n"
-    
     if os.path.exists(BG_IMG_PATH):
         with open(BG_IMG_PATH, "rb") as f:
             b64_data = base64.b64encode(f.read()).decode()
@@ -32,7 +27,6 @@ def inject_custom_css():
             background-position: center;
             background-attachment: fixed;
         }}
-        /* 内容区底板，适配深浅色模式 */
         .block-container {{
             background-color: var(--background-color);
             opacity: 0.95;
@@ -41,25 +35,17 @@ def inject_custom_css():
             box-shadow: 0 8px 16px rgba(0, 0, 0, 0.5);
         }}
         """
-        
     css_rules += "</style>"
     st.markdown(css_rules, unsafe_allow_html=True)
 
 inject_custom_css()
 
-# -----------------------------------------------------------------------------
-# 数据库核心操作
-# -----------------------------------------------------------------------------
+# Database Layer
 def get_connection():
-    """建立并返回 SQLite 数据库连接"""
     return sqlite3.connect(DB_NAME, check_same_thread=False)
 
 def format_citation(row):
-    """
-    将数据库记录格式化为 GB/T 7714-2015 标准引用样式
-    :param row: 包含单条成果记录的字典或 pandas Series
-    :return: 格式化后的引用字符串
-    """
+    """Format DB record to GB/T 7714-2015 standard"""
     cat = row['category']
     authors = row['authors'] if row['authors'] else ""
     title = row['title']
@@ -93,23 +79,17 @@ def format_citation(row):
     return f"{title}"
 
 def get_duplicate_achievement(title):
-    """
-    检查数据库中是否已存在同名成果
-    :return: 如果存在则返回第一条匹配的记录(Series)，否则返回 None
-    """
+    """Check for exact title duplicates in the DB"""
     if not title:
         return None
     conn = get_connection()
-    # 使用 LIKE 实现忽略大小写的精确匹配检查
     df = pd.read_sql_query("SELECT * FROM achievements WHERE title LIKE ?", conn, params=(title.strip(),))
     conn.close()
     if not df.empty:
         return df.iloc[0]
     return None
 
-# -----------------------------------------------------------------------------
-# 侧边栏导航与状态管理
-# -----------------------------------------------------------------------------
+# UI Navigation & State Management
 st.sidebar.title("系统导航")
 menu = st.sidebar.radio(
     "功能模块", 
@@ -117,7 +97,20 @@ menu = st.sidebar.radio(
     label_visibility="collapsed"
 )
 
-# 确保切换菜单时清理相关的页面层级状态
+st.sidebar.write("---")
+st.sidebar.subheader("云端数据备份")
+st.sidebar.caption("云端数据备份下载，防止数据丢失")
+if os.path.exists(DB_NAME):
+    with open(DB_NAME, "rb") as db_file:
+        st.sidebar.download_button(
+            label="下载数据库 (.sqlite)",
+            data=db_file,
+            file_name=f"academic_db_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.sqlite",
+            mime="application/octet-stream",
+            use_container_width=True
+        )
+
+# Reset context variables when menu changes
 if 'current_menu' not in st.session_state:
     st.session_state['current_menu'] = menu
     st.session_state['editing_id'] = None
@@ -130,24 +123,18 @@ elif st.session_state['current_menu'] != menu:
     st.session_state['editing_std_name'] = None
     st.session_state['show_export_page'] = False
 
-# -----------------------------------------------------------------------------
-# 高级搜索辅助函数
-# -----------------------------------------------------------------------------
+# Search Utilities
 def row_match(row, kw, alias_map):
-    # 1. 检查所有文本字段
     text_to_search = f"{row.get('year','')} {row.get('title','')} {row.get('source','')} {row.get('status','')} {row.get('identifier','')}"
     if kw.lower() in text_to_search.lower():
         return True
     
-    # 2. 检查作者字段及其别名映射
     row_authors = str(row.get('authors', '')).lower()
     if kw.lower() in row_authors:
         return True
     
     for std_name, aliases in alias_map.items():
-        # 如果搜索关键字是某个标准名或其别名
         if kw.lower() in std_name.lower() or any(kw.lower() in a.lower() for a in aliases):
-            # 则反向检查该条记录的作者里是否包含这个标准名或其兄弟别名
             if std_name.lower() in row_authors or any(a.lower() in row_authors for a in aliases):
                 return True
     return False
@@ -156,10 +143,8 @@ def evaluate_query(row, query, alias_map):
     if not query.strip():
         return True
     
-    # 处理 OR 逻辑: 使用 | 符号分割
     or_blocks = query.split('|')
     for block in or_blocks:
-        # 处理 AND 逻辑: 使用空格分割
         tokens = block.strip().split()
         block_match = True
         for token in tokens:
@@ -167,12 +152,10 @@ def evaluate_query(row, query, alias_map):
             if not token: continue
             
             is_not = False
-            # 识别排除符（如 -2025）
             if token.startswith('-'):
                 is_not = True
                 token = token[1:].strip()
             
-            # 排除独立的无意义负号
             if not token: continue
             
             match_token = row_match(row, token, alias_map)
@@ -183,16 +166,12 @@ def evaluate_query(row, query, alias_map):
                 block_match = False
                 break
                 
-        # 任何一个 OR 块成立，整条语句就成立
         if block_match:
             return True
     return False
 
-# -----------------------------------------------------------------------------
-# 模块：成果检索与修改
-# -----------------------------------------------------------------------------
+# Controller: Search & Edit
 if menu == "成果检索与修改":
-    
     if 'editing_id' not in st.session_state:
         st.session_state['editing_id'] = None
     
@@ -200,24 +179,20 @@ if menu == "成果检索与修改":
         st.success(st.session_state['success_msg'])
         del st.session_state['success_msg']
         
-    # 记录持久化搜索状态，实现跨页面记忆和消除回车延迟
     if 'saved_search_cat' not in st.session_state:
         st.session_state['saved_search_cat'] = "全部"
     if 'saved_search_kw' not in st.session_state:
         st.session_state['saved_search_kw'] = ""
         
     def update_search_state():
-        """回调函数：实时同步组件状态到持久化缓存中，解决迟滞Bug"""
         st.session_state['saved_search_cat'] = st.session_state['search_cat_widget']
         st.session_state['saved_search_kw'] = st.session_state['search_kw_widget']
 
-    # ======================================
-    # 视图：批量导出/打印页面
-    # ======================================
+    # Export View
     if st.session_state.get('show_export_page'):
-        st.header("📄 批量打印与导出")
-        st.info("以下为您检索到的所有记录的 GB/T 7714-2015 格式文本，可直接 `Ctrl+A` 全选复制。")
-        if st.button("⬅️ 返回检索列表", type="primary"):
+        st.header("批量打印与导出")
+        st.info("以下为您检索到的所有记录的 GB/T 7714-2015 格式文本，可直接 Ctrl+A 全选复制。")
+        if st.button("返回检索列表", type="primary"):
             st.session_state['show_export_page'] = False
             st.rerun()
         
@@ -227,15 +202,12 @@ if menu == "成果检索与修改":
             export_text += f"[{i+1}] {format_citation(row)}\n"
         
         st.code(export_text, language="text")
-        st.stop()  # 停止渲染下方原有的检索界面
+        st.stop()
         
-    # ======================================
-    # 视图一：检索列表
-    # ======================================
+    # Search List View
     if st.session_state.get('editing_id') is None:
         st.header("成果检索与修改")
         
-        # 绑定状态到 key，并使用 on_change 回调
         category_filter = st.radio(
             "选择成果类别", 
             ["全部", "期刊论文", "会议论文", "发明专利", "软件著作权"], 
@@ -245,7 +217,7 @@ if menu == "成果检索与修改":
             on_change=update_search_state
         )
         
-        st.markdown("<small>💡 **高级搜索提示**: **空格** 表示与(AND) 例如 `2025 龚文杰`； **|** 表示或(OR) 例如 `2025|2026`； **-** 表示排除(NOT) 例如 `张广辉 -2025`。</small>", unsafe_allow_html=True)
+        st.markdown("<small>**高级搜索提示**: **空格** 表示与(AND) 例如 `2025 龚文杰`； **|** 表示或(OR) 例如 `2025|2026`； **-** 表示排除(NOT) 例如 `张广辉 -2025`。</small>", unsafe_allow_html=True)
         search_query = st.text_input(
             "输入检索关键字 (输入后按下回车键立即筛选)", 
             value=st.session_state['saved_search_kw'],
@@ -254,10 +226,8 @@ if menu == "成果检索与修改":
         )
         
         conn = get_connection()
-        # 默认按年份和ID倒序，保证最新的在最上面
         df = pd.read_sql_query("SELECT * FROM achievements ORDER BY year DESC, id DESC", conn)
         
-        # 提取别名字典映射供高级搜索使用
         cursor = conn.cursor()
         cursor.execute("SELECT standard_name, alias FROM author_aliases")
         alias_map = {}
@@ -265,7 +235,6 @@ if menu == "成果检索与修改":
             alias_map.setdefault(std, set()).add(alias)
         conn.close()
         
-        # 应用过滤逻辑 (使用及时更新好的 widget 变量)
         if category_filter != "全部":
             df = df[df['category'] == category_filter]
         if search_query:
@@ -274,20 +243,17 @@ if menu == "成果检索与修改":
         if df.empty:
             st.write("未检索到匹配的成果数据。")
         else:
-            # 增加批量导出按钮布局
             col_res, col_exp = st.columns([7, 3])
             col_res.write(f"共检索到 {len(df)} 条记录：")
-            if col_exp.button("📄 批量导出当前结果", use_container_width=True):
+            if col_exp.button("批量导出当前结果", use_container_width=True):
                 st.session_state['export_df'] = df
                 st.session_state['show_export_page'] = True
                 st.rerun()
             
             for index, row in df.iterrows():
-                # 埋入 HTML 锚点
                 st.markdown(f"<div id='item_{row['id']}'></div>", unsafe_allow_html=True)
                 col1, col2 = st.columns([9, 1])
                 
-                # 安全提取并格式化年份前缀
                 year_val = row['year']
                 year_prefix = f"[{int(year_val)}]" if pd.notna(year_val) and year_val else "[无年份]"
                 display_text = f"**{year_prefix}** [{row['status']}] {format_citation(row)}"
@@ -297,7 +263,6 @@ if menu == "成果检索与修改":
                     st.session_state['editing_id'] = row['id']
                     st.rerun()
 
-            # 执行滚动位置还原 JS 脚本
             if st.session_state.get('last_viewed_id'):
                 components.html(
                     f"""
@@ -314,7 +279,7 @@ if menu == "成果检索与修改":
                 )
                 st.session_state['last_viewed_id'] = None
 
-    # 视图二：详情与属性修改
+    # Detail & Edit View
     else:
         st.header("成果详情与修改")
             
@@ -343,7 +308,6 @@ if menu == "成果检索与修改":
             
             new_status = st.selectbox("状态", options=status_options, index=status_index)
             
-            # 初始化占位变量防止后续逻辑报错
             new_title = target_row['title']
             new_authors = target_row['authors']
             new_year = target_row['year']
@@ -351,7 +315,6 @@ if menu == "成果检索与修改":
             new_details = target_row['details']
             new_identifier = target_row['identifier']
             
-            # 基于不同类别的定制化表单
             if cat == "期刊论文":
                 new_title = st.text_input("文章名", value=target_row['title'] if target_row['title'] else "")
                 new_authors = st.text_input("作者", value=target_row['authors'] if target_row['authors'] else "")
@@ -379,7 +342,6 @@ if menu == "成果检索与修改":
             submit_update = st.form_submit_button("保存修改")
             
             if submit_update:
-                # 核心信息非空校验
                 valid = True
                 if not new_title: valid = False
                 if cat in ["期刊论文", "会议论文", "发明专利"] and not new_authors: valid = False
@@ -404,14 +366,12 @@ if menu == "成果检索与修改":
                     st.rerun()
 
         st.write("---")
-        if st.button("⬅️ 返回列表 (放弃未保存的修改)", use_container_width=True, type="primary"):
+        if st.button("返回列表 (放弃未保存的修改)", use_container_width=True, type="primary"):
             st.session_state['last_viewed_id'] = st.session_state['editing_id']
             st.session_state['editing_id'] = None
             st.rerun()
 
-# -----------------------------------------------------------------------------
-# 模块：成果信息录入
-# -----------------------------------------------------------------------------
+# Controller: Data Entry
 elif menu == "成果信息录入":
     st.header("成果信息录入")
     
@@ -481,7 +441,7 @@ elif menu == "成果信息录入":
                 else:
                     dup = get_duplicate_achievement(title)
                     if dup is not None:
-                        st.error(f"🚫 **禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
+                        st.error(f"**禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
                     else:
                         conn = get_connection()
                         conn.execute("INSERT INTO achievements (category, status, title, authors, year, source, details) VALUES (?,?,?,?,?,?,?)",
@@ -539,7 +499,7 @@ elif menu == "成果信息录入":
                 else:
                     dup = get_duplicate_achievement(title)
                     if dup is not None:
-                        st.error(f"🚫 **禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
+                        st.error(f"**禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
                     else:
                         conn = get_connection()
                         conn.execute("INSERT INTO achievements (category, status, title, authors, year, source) VALUES (?,?,?,?,?,?)",
@@ -564,7 +524,7 @@ elif menu == "成果信息录入":
                 else:
                     dup = get_duplicate_achievement(title)
                     if dup is not None:
-                        st.error(f"🚫 **禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
+                        st.error(f"**禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
                     else:
                         conn = get_connection()
                         conn.execute("INSERT INTO achievements (category, status, title, authors, year, identifier) VALUES (?,?,?,?,?,?)",
@@ -584,7 +544,7 @@ elif menu == "成果信息录入":
                 else:
                     dup = get_duplicate_achievement(title)
                     if dup is not None:
-                        st.error(f"🚫 **禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
+                        st.error(f"**禁止录入：系统检测到同名成果已存在！**\n\n已存在成果信息：{format_citation(dup)}")
                     else:
                         conn = get_connection()
                         conn.execute("INSERT INTO achievements (category, status, title, identifier) VALUES (?,?,?,?)",
@@ -593,18 +553,15 @@ elif menu == "成果信息录入":
                         st.session_state['success_msg'] = "软件著作权录入成功。"
                         st.rerun()
 
-# -----------------------------------------------------------------------------
-# 模块：作者别名管理
-# -----------------------------------------------------------------------------
+# Controller: Alias Management
 elif menu == "作者别名管理":
-    
     if 'success_msg' in st.session_state:
         st.success(st.session_state['success_msg'])
         del st.session_state['success_msg']
 
     conn = get_connection()
 
-    # 视图一：标准名及别名分组列表
+    # Dictionary View
     if st.session_state.get('editing_std_name') is None:
         st.header("作者别名字典管理")
         st.info("系统支持一对多映射。建立映射后，在检索中输入相应的标准名或任意别名，即可统一汇集展示关联的全部成果记录。")
@@ -632,14 +589,12 @@ elif menu == "作者别名管理":
         st.write("---")
         st.subheader("现有字典映射一览 (点击条目进入编辑)")
         
-        # 将相同标准名的别名聚合展示
         df_aliases = pd.read_sql_query("SELECT standard_name, GROUP_CONCAT(alias, ', ') as aliases FROM author_aliases GROUP BY standard_name", conn)
         
         if df_aliases.empty:
             st.write("当前系统字典为空。")
         else:
             for index, row in df_aliases.iterrows():
-                # 埋入字典界面的 HTML 锚点
                 st.markdown(f"<div id='dict_{row['standard_name']}'></div>", unsafe_allow_html=True)
                 col1, col2 = st.columns([9, 1])
                 display_text = f"标准名: {row['standard_name']} | 关联别名: {row['aliases']}"
@@ -648,7 +603,6 @@ elif menu == "作者别名管理":
                     st.session_state['editing_std_name'] = row['standard_name']
                     st.rerun()
 
-            # 执行滚动位置还原 JS 脚本
             if st.session_state.get('last_viewed_dict'):
                 components.html(
                     f"""
@@ -665,7 +619,7 @@ elif menu == "作者别名管理":
                 )
                 st.session_state['last_viewed_dict'] = None
 
-    # 视图二：选定标准名的映射详情与编辑
+    # Alias Edit View
     else:
         std_name = st.session_state['editing_std_name']
         st.header(f"管理映射字典: {std_name}")
@@ -687,7 +641,6 @@ elif menu == "作者别名管理":
         st.subheader("关联别名维护")
         df_items = pd.read_sql_query("SELECT id, alias FROM author_aliases WHERE standard_name=?", conn, params=(std_name,))
         
-        # 逐条罗列包含的别名，并提供移除按钮
         for index, row in df_items.iterrows():
             col1, col2 = st.columns([9, 1])
             col1.write(f"- {row['alias']}")
@@ -696,7 +649,6 @@ elif menu == "作者别名管理":
                 conn.commit()
                 st.rerun()
 
-        # 在当前分组中追加新别名
         with st.form("add_alias_to_group_form"):
             additional_alias = st.text_input("为此标准姓名追加新的别名/缩写")
             if st.form_submit_button("追加别名"):
@@ -712,18 +664,15 @@ elif menu == "作者别名管理":
                         st.error("操作失败：该别名在数据库中已存在。")
                         
         st.write("---")
-        if st.button("⬅️ 返回字典列表", use_container_width=True, type="primary"):
+        if st.button("返回字典列表", use_container_width=True, type="primary"):
             st.session_state['last_viewed_dict'] = std_name
             st.session_state['editing_std_name'] = None
             st.rerun()
                         
     conn.close()
 
-# -----------------------------------------------------------------------------
-# 模块：成果信息删除
-# -----------------------------------------------------------------------------
+# Controller: Delete Item
 elif menu == "成果信息删除":
-    
     if 'delete_id' not in st.session_state:
         st.session_state['delete_id'] = None
         
@@ -742,7 +691,6 @@ elif menu == "成果信息删除":
             for index, row in df.iterrows():
                 col1, col2 = st.columns([9, 1])
                 
-                # 安全提取并格式化年份前缀
                 year_val = row['year']
                 year_prefix = f"[{int(year_val)}]" if pd.notna(year_val) and year_val else "[无年份]"
                 display_text = f"{year_prefix} {format_citation(row)}"
